@@ -216,17 +216,6 @@ Problems are selected by shuffling each dataset with seed 42 and taking the firs
 pytest tests/ -v
 ```
 
-## Citation
-
-```bibtex
-@inproceedings{convergence2026,
-  title={Convergence Without Understanding: When Language Models Agree on Representations but Disagree on Reasoning},
-  author={Anonymous},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2026}
-}
-```
-
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
