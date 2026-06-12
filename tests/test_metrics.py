@@ -239,3 +239,39 @@ class TestMNN:
         X_rot = X @ Q
         result = mutual_nearest_neighbors(X, X_rot, k=5)
         assert result > 0.9, f"Expected high MNN after rotation, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# TestMNNNormalization
+# ---------------------------------------------------------------------------
+
+class TestMNNNormalization:
+    """normalize=True (default) compares directions, not magnitudes."""
+
+    def test_per_sample_scaling_invariance(self):
+        # Y = X with each sample rescaled: identical directions, different
+        # norms. Cosine neighbors are identical; Euclidean neighbors are not.
+        rng = np.random.default_rng(7)
+        X = random_matrix(60, 16, rng)
+        scales = rng.uniform(0.2, 5.0, size=(60, 1))
+        Y = X * scales
+        assert abs(mutual_nearest_neighbors(X, Y, k=5) - 1.0) < 1e-6
+
+    def test_unnormalized_is_magnitude_sensitive(self):
+        # Same setup: the old behavior (normalize=False) does NOT see the
+        # spaces as identical, demonstrating the magnitude confound.
+        rng = np.random.default_rng(7)
+        X = random_matrix(60, 16, rng)
+        scales = rng.uniform(0.2, 5.0, size=(60, 1))
+        Y = X * scales
+        assert mutual_nearest_neighbors(X, Y, k=5, normalize=False) < 0.9
+
+    def test_rotation_invariance_with_normalization(self):
+        X = random_matrix(50, 8)
+        Q = random_rotation(8)
+        result = mutual_nearest_neighbors(X, X @ Q, k=5)
+        assert result > 0.9
+
+    def test_identity_still_one(self):
+        X = random_matrix(40, 6)
+        assert abs(mutual_nearest_neighbors(X, X, k=5) - 1.0) < 1e-6
