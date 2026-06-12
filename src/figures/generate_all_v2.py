@@ -320,9 +320,11 @@ def fig5_transfer_vs_causal():
         if probe_entry is None:
             continue
         pa = probe_entry["peak_layer_mean_linear_acc"]
-        abl = model_data.get("ablation_flip_rates", {})
+        # exp03 nests per-magnitude dicts under the model:
+        # {"1.0": {"ablation_flip_rate": x, ...}}
         max_fr = max(
-            (abl.get(str(m), 0) for m in [0.5, 1.0, 1.5, 2.0]),
+            (model_data.get(str(m), {}).get("ablation_flip_rate", 0)
+             for m in [0.5, 1.0, 1.5, 2.0]),
             default=0,
         )
         if not isinstance(max_fr, (int, float)):

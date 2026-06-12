@@ -16,7 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
 from src.config import PATHS, MAX_SEQ_LEN, MAX_NEW_TOKENS, ensure_all_dirs
 from src.data_loading import load_all_problems, format_prompt
-from src.evaluation import evaluate_response, save_evaluation_results
+from src.evaluation import evaluate_response, save_evaluation_results, valid_letters_for
 from src.extraction import get_states_at_normalized_positions
 from src.metrics.cka import linear_cka
 
@@ -68,7 +68,10 @@ def evaluate_base_model(model_cfg, problems, device="cuda"):
             )
 
         response = tokenizer.decode(output_ids[0][input_len:], skip_special_tokens=True)
-        eval_result = evaluate_response(response, problem["gold_answer"], problem["task_type"])
+        eval_result = evaluate_response(
+            response, problem["gold_answer"], problem["task_type"],
+            valid_letters=valid_letters_for(problem),
+        )
 
         results.append({
             "problem_id": problem["problem_id"],

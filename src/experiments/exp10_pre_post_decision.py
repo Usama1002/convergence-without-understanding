@@ -39,6 +39,21 @@ def _compute_pair_cka(args: tuple) -> dict:
     raw_a = data_a[phase]  # (n_problems, n_layers_p1, hidden_dim)
     raw_b = data_b[phase]
 
+    # Models >10B have no post-decision pass (see extraction.py): NaN in new
+    # extractions, a copy of the pre states in legacy ones. Exclude both.
+    if phase == "post_decision":
+        for name, raw, data in ((model_a, raw_a, data_a), (model_b, raw_b, data_b)):
+            if np.isnan(raw[:, 0, 0]).any() or np.array_equal(
+                raw[:2], data["pre_decision"][:2]
+            ):
+                return {
+                    "model_a": model_a,
+                    "model_b": model_b,
+                    "phase": phase,
+                    "error": f"post_decision states missing for {name} "
+                             "(extraction skips the post pass for >10B models)",
+                }
+
     n_layers_a = raw_a.shape[1]
     n_layers_b = raw_b.shape[1]
 
@@ -138,13 +153,22 @@ def run_experiment_10(n_workers: int = 16) -> dict:
     }
     phase_pair_counts: dict[str, int] = {p: 0 for p in phases}
 
+    # Compare pre and post over the same pair set: pairs without valid post
+    # states (>10B models) are excluded from both phases.
+    by_pair: dict[tuple[str, str], dict[str, list[float]]] = {}
     for rec in pair_results:
         phase = rec.get("phase", "")
         if "error" in rec or phase not in phases:
             continue
         cka_vals = rec.get("cka_per_layer", [])
         if len(cka_vals) == 21:
-            phase_cka_sums[phase] += np.array(cka_vals)
+            pair = (rec["model_a"], rec["model_b"])
+            by_pair.setdefault(pair, {})[phase] = cka_vals
+
+    complete_pairs = [p for p, d in by_pair.items() if len(d) == len(phases)]
+    for pair in complete_pairs:
+        for phase in phases:
+            phase_cka_sums[phase] += np.array(by_pair[pair][phase])
             phase_pair_counts[phase] += 1
 
     mean_cka_pre = (
@@ -182,6 +206,7 @@ def run_experiment_10(n_workers: int = 16) -> dict:
     output = {
         "n_models": len(available_models),
         "n_pairs": len(model_pairs),
+        "n_pairs_compared": len(complete_pairs),
         "mean_cka_pre_decision": mean_cka_pre,
         "mean_cka_post_decision": mean_cka_post,
         "comparison": comparison,

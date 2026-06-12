@@ -17,7 +17,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
 from src.config import MODEL_REGISTRY, MODEL_SHORT_NAMES, PATHS, MAX_SEQ_LEN, MAX_NEW_TOKENS
 from src.data_loading import load_all_problems, format_prompt
-from src.evaluation import evaluate_response, load_evaluation_results
+from src.evaluation import evaluate_response, load_evaluation_results, valid_letters_for
+from src.extraction import get_layer_mapping
 
 
 def run_expanded_causal(device="cuda", min_agreement=10, max_problems_per_model=100):
@@ -62,7 +63,9 @@ def run_expanded_causal(device="cuda", min_agreement=10, max_problems_per_model=
     for model_cfg in model_subset:
         name = model_cfg["short_name"]
         hf_id = model_cfg["hf_id"]
-        peak_layer = peak_layers.get(name, 10)
+        # peak_layer_idx indexes the 21 normalized probe positions, not the
+        # model's transformer blocks; mapped to a block once the model loads.
+        peak_pos = peak_layers.get(name, 10)
 
         # Problems this model got correct within high-agreement set
         model_eval = all_eval[name]
@@ -74,7 +77,7 @@ def run_expanded_causal(device="cuda", min_agreement=10, max_problems_per_model=
             print(f"  {name}: only {len(ablation_indices)} problems, skipping", flush=True)
             continue
 
-        print(f"  {name}: {len(ablation_indices)} problems, peak layer {peak_layer}", flush=True)
+        print(f"  {name}: {len(ablation_indices)} problems, peak position {peak_pos}", flush=True)
 
         # Load correctness direction
         direction_path = Path(str(PATHS["metrics"])) / "probes" / "weights" / f"{name}_correctness_direction.npy"
@@ -105,6 +108,10 @@ def run_expanded_causal(device="cuda", min_agreement=10, max_problems_per_model=
             print(f"    Can't find layers, skipping", flush=True)
             del model; torch.cuda.empty_cache()
             continue
+
+        # Hidden-state row L is the output of block L-1 (row 0 = embeddings)
+        hs_row = get_layer_mapping(len(layers) + 1, n_positions=21)[peak_pos]
+        peak_layer = max(hs_row - 1, 0)
 
         # Run ablation at magnitude 1.0
         n_flips = 0
@@ -140,7 +147,10 @@ def run_expanded_causal(device="cuda", min_agreement=10, max_problems_per_model=
                     )
                 input_len = inputs["input_ids"].shape[1]
                 response = tokenizer.decode(output_ids[0][input_len:], skip_special_tokens=True)
-                eval_result = evaluate_response(response, problem["gold_answer"], problem["task_type"])
+                eval_result = evaluate_response(
+                    response, problem["gold_answer"], problem["task_type"],
+                    valid_letters=valid_letters_for(problem),
+                )
                 if not eval_result["correct"]:
                     n_flips += 1
                 n_tested += 1
@@ -166,7 +176,7 @@ def run_expanded_causal(device="cuda", min_agreement=10, max_problems_per_model=
     all_flip_rates = [r["flip_rate"] for r in results.values()]
     results["_summary"] = {
         "mean_flip_rate": float(np.mean(all_flip_rates)) if all_flip_rates else 0,
-        "n_models": len(results) - 1,
+        "n_models": len(results),
         "min_agreement": min_agreement,
         "n_high_agreement_problems": len(high_agreement),
     }

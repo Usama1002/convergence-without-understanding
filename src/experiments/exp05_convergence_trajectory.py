@@ -161,7 +161,8 @@ def run_experiment_5() -> dict:
         model_a = rec.get("model_a", "")
         model_b = rec.get("model_b", "")
         condition = rec.get("condition", "all_correct")
-        layer_idx = rec.get("layer_idx", rec.get("layer", 0))
+        # exp01 writes the layer index under "layer_pos_idx"
+        layer_idx = rec.get("layer_pos_idx", rec.get("layer_idx", rec.get("layer", 0)))
         key = f"{model_a}||{model_b}||{condition}"
         trajectories[key].append({
             "layer_idx": int(layer_idx),

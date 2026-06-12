@@ -65,7 +65,8 @@ def _load_pairwise_cka() -> dict[tuple[str, str], list[float]] | None:
     for rec in results_list:
         model_a = rec.get("model_a", "")
         model_b = rec.get("model_b", "")
-        layer_idx = int(rec.get("layer_idx", rec.get("layer", 0)))
+        # exp01 writes the layer index under "layer_pos_idx"
+        layer_idx = int(rec.get("layer_pos_idx", rec.get("layer_idx", rec.get("layer", 0))))
         cka_val = rec.get("cka")
         if cka_val is not None and not (isinstance(cka_val, float) and np.isnan(cka_val)):
             cka_accum[(model_a, model_b, layer_idx)].append(float(cka_val))

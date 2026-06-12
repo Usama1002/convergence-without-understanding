@@ -8,7 +8,7 @@ if not hasattr(DynamicCache, 'get_max_length'):
     DynamicCache.get_max_length = lambda self: None
 
 from src.data_loading import load_all_problems, format_prompt
-from src.evaluation import evaluate_response
+from src.evaluation import evaluate_response, valid_letters_for
 
 MODELS_70B = [
     {"short_name": "LLaMA-3.1-70B", "hf_id": "meta-llama/Llama-3.1-70B-Instruct", "params_b": 70.0},
@@ -53,7 +53,10 @@ def evaluate_large_model(model_cfg, problems, max_new_tokens=256):
         gen_time = time.time() - t0
 
         response = tokenizer.decode(output_ids[0][input_len:], skip_special_tokens=True)
-        eval_result = evaluate_response(response, problem["gold_answer"], problem["task_type"])
+        eval_result = evaluate_response(
+            response, problem["gold_answer"], problem["task_type"],
+            valid_letters=valid_letters_for(problem),
+        )
 
         results.append({
             "problem_id": problem["problem_id"],

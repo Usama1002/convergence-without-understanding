@@ -32,11 +32,23 @@ from src.config import (
 )
 from src.data_loading import format_prompt, load_all_problems
 from src.evaluation import evaluate_response
+from src.extraction import get_layer_mapping
 
 
 # ---------------------------------------------------------------------------
 # Path helpers (keys may not be in PATHS; fall back gracefully)
 # ---------------------------------------------------------------------------
+
+def _summarize_flip_rates(model_results: dict) -> dict:
+    """Per-magnitude flip rates from a per-model result dict (fresh or cached)."""
+    return {
+        mag_key: {
+            "ablation_flip_rate": mag_data["ablation"]["flip_rate"],
+            "amplification_flip_rate": mag_data["amplification"]["flip_rate"],
+        }
+        for mag_key, mag_data in model_results.get("magnitudes", {}).items()
+    }
+
 
 def _probes_weights_dir() -> Path:
     """Return the directory that holds probe weight files."""
@@ -217,18 +229,21 @@ def _run_model(
     direction_norm: np.ndarray = direction / (np.linalg.norm(direction) + 1e-12)
 
     # Get peak layer from Exp 2 JSON results
-    exp2_json_path = probes_dir / "linear" / "exp02_all_results.json"
-    if exp2_json_path.exists():
-        with open(exp2_json_path) as fh:
-            exp2_data = json.load(fh)
-        # exp2_data is a list of dicts, find our model
-        model_entry = next((m for m in exp2_data if m["model"] == name), None)
-        if model_entry:
-            peak_layer: int = int(model_entry["peak_layer_idx"])
-        else:
-            peak_layer = 0
-    else:
-        peak_layer = 0
+    exp2_json_path = Path(PATHS["probes_linear"]) / "exp02_all_results.json"
+    if not exp2_json_path.exists():
+        raise FileNotFoundError(
+            f"exp02 results not found: {exp2_json_path} (run exp02 first; "
+            "intervening at a default layer would be meaningless)"
+        )
+    with open(exp2_json_path) as fh:
+        exp2_data = json.load(fh)
+    # exp2_data is a list of dicts, find our model
+    model_entry = next((m for m in exp2_data if m["model"] == name), None)
+    if model_entry is None:
+        raise FileNotFoundError(f"no exp02 entry for model {name} in {exp2_json_path}")
+    # peak_layer_idx indexes the 21 normalized probe positions, not the
+    # model's transformer blocks; mapped to a block once the model is loaded.
+    peak_pos_idx: int = int(model_entry["peak_layer_idx"])
 
     # ------------------------------------------------------------------
     # Load model
@@ -248,6 +263,10 @@ def _run_model(
     model.eval()
 
     layers = _get_layers(model)
+    # Hidden-state row L is the output of block L-1 (row 0 = embeddings),
+    # so the probe position maps to its row first, then to the block.
+    hs_row = get_layer_mapping(len(layers) + 1, n_positions=21)[peak_pos_idx]
+    peak_layer = max(hs_row - 1, 0)
     target_layer = layers[peak_layer]
 
     # ------------------------------------------------------------------
@@ -263,6 +282,7 @@ def _run_model(
     model_results: dict = {
         "model": name,
         "peak_layer": peak_layer,
+        "peak_position_idx": peak_pos_idx,
         "n_ablation_problems": len(ablation_indices),
         "n_amplification_problems": len(amplification_indices),
         "magnitudes": {},
@@ -412,7 +432,7 @@ def run_experiment_3(device: str = "cuda") -> dict:
             print(f"[exp03] Skipping {name} (already done)")
             with open(result_path, "r") as fh:
                 model_results = json.load(fh)
-            summary["models"][name] = model_results.get("summary", {})
+            summary["models"][name] = _summarize_flip_rates(model_results)
             continue
 
         print(f"[exp03] Processing model: {name}")
@@ -438,12 +458,7 @@ def run_experiment_3(device: str = "cuda") -> dict:
         print(f"[exp03]   Saved {out_path}")
 
         # Aggregate into summary
-        summary["models"][name] = {}
-        for mag_key, mag_data in model_results["magnitudes"].items():
-            summary["models"][name][mag_key] = {
-                "ablation_flip_rate": mag_data["ablation"]["flip_rate"],
-                "amplification_flip_rate": mag_data["amplification"]["flip_rate"],
-            }
+        summary["models"][name] = _summarize_flip_rates(model_results)
 
     # Save summary
     summary_path = causal_dir / "exp03_summary.json"
