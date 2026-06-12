@@ -274,3 +274,66 @@ class TestCliffsDelta:
         b = rng.normal(1, 1, 200)
         delta = cliffs_delta(a, b)
         assert 0.1 < delta < 0.9
+
+
+# ---------------------------------------------------------------------------
+# TestSubsamplingCI (bootstrap_ci_two_sample resamples WITHOUT replacement)
+# ---------------------------------------------------------------------------
+
+
+class TestSubsamplingCI:
+
+    def test_duplicates_inflate_gram_metrics(self):
+        # The reason for subsampling: with-replacement resamples contain
+        # duplicate rows, which make the Gram matrix low-rank and inflate
+        # CKA. On independent data the duplicated resample scores higher.
+        from src.metrics.cka import linear_cka
+
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((60, 32))
+        Y = rng.standard_normal((60, 32))
+        idx_dup = rng.integers(0, 60, size=60)      # with replacement
+        idx_sub = rng.choice(60, size=48, replace=False)  # without
+        assert linear_cka(X[idx_dup], Y[idx_dup]) > linear_cka(X[idx_sub], Y[idx_sub])
+
+    def test_interval_contains_observed_for_stable_metric(self):
+        from src.metrics.cka import linear_cka
+
+        rng = np.random.default_rng(1)
+        z = rng.standard_normal((80, 8))
+        X = z @ rng.standard_normal((8, 24))
+        Y = z @ rng.standard_normal((8, 24))
+        observed, lower, upper = bootstrap_ci_two_sample(
+            X, Y, linear_cka, n_bootstrap=200, seed=0
+        )
+        assert lower <= upper
+        # the interval is recentered on the observed statistic, so it
+        # contains it by construction (the raw size-m percentiles need not,
+        # because the biased estimator's bias depends on n)
+        assert lower <= observed <= upper
+
+    def test_subsample_size_floor(self):
+        # Tiny n must not produce degenerate (<4 row) resamples.
+        rng = np.random.default_rng(2)
+        X = rng.standard_normal((5, 4))
+        Y = rng.standard_normal((5, 4))
+        observed, lower, upper = bootstrap_ci_two_sample(
+            X, Y, lambda a, b: float(a.shape[0]), n_bootstrap=10, seed=0
+        )
+        assert lower >= 4
+
+
+class TestBCaDegenerateCases:
+
+    def test_one_sided_bootstrap_distribution_falls_back(self):
+        # With stat_fn=min every resample is >= the observed minimum, so the
+        # bias-correction z0 = ppf(0) is infinite; the BCa adjustment must
+        # fall back to a plain percentile CI instead of raising on nan
+        # percentiles.
+        lower, upper = bootstrap_ci([1, 2, 3, 4, 5], stat_fn=np.min, n_bootstrap=200, seed=0)
+        assert np.isfinite(lower) and np.isfinite(upper)
+        assert lower <= upper
+
+    def test_tied_data_does_not_crash(self):
+        lower, upper = bootstrap_ci([1, 1, 1, 1, 2], stat_fn=np.min, n_bootstrap=100, seed=0)
+        assert np.isfinite(lower) and np.isfinite(upper)

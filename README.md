@@ -172,7 +172,7 @@ The 14-model core cohort spans 8 architectural families:
 | Mistral-7B | Mistral | 7.0B | `mistralai/Mistral-7B-Instruct-v0.3` |
 | OLMo-2-7B | OLMo | 7.0B | `allenai/OLMo-2-1124-7B-Instruct` |
 | InternLM-2.5-7B | InternLM | 7.0B | `internlm/internlm2_5-7b-chat` |
-| Nemotron-8B | LLaMA | 8.0B | `nvidia/Nemotron-4-340B-Instruct` |
+| Nemotron-8B | LLaMA | 8.0B | `nvidia/Llama-3.1-Nemotron-Nano-8B-v1` |
 | Gemma-2-9B | Gemma | 9.0B | `google/gemma-2-9b-it` |
 | Qwen-2.5-14B | Qwen | 14.0B | `Qwen/Qwen2.5-14B-Instruct` |
 

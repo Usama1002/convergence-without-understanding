@@ -246,8 +246,9 @@ def extract_hidden_states_for_model(
             # For very large models (>10B), skip post-decision to avoid OOM.
             # The pre-decision states are the primary analysis target.
             if params_b > 10:
-                # Copy pre-decision as post-decision placeholder
-                post_decision[i] = pre_decision[i]
+                # NaN marks the post states as missing; a pre-decision copy
+                # would make any pre-vs-post comparison vacuously identical.
+                post_decision[i] = np.nan
             else:
                 gen_out = model.generate(
                     input_ids,
