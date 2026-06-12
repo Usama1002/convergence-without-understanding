@@ -373,3 +373,74 @@ class TestLoadDatasetErrors:
     def test_invalid_dataset_raises(self):
         with pytest.raises(ValueError, match="Unknown dataset"):
             load_dataset_for_eval("nonexistent_dataset")
+
+
+# ---------------------------------------------------------------------------
+# Gold-answer fixes (pure parser tests, no dataset download)
+# ---------------------------------------------------------------------------
+
+
+class TestArcAnswerKeyMapping:
+    @staticmethod
+    def _row(labels, key):
+        return {
+            "question": "Which one?",
+            "choices": {
+                "text": [f"choice {l}" for l in labels],
+                "label": list(labels),
+            },
+            "answerKey": key,
+        }
+
+    def test_numeric_answer_key_maps_to_letter(self):
+        # Some ARC items use numeric labels; the raw key "3" can never match
+        # the letter the model answers, so it must map via position -> "C".
+        from src.data_loading import _parse_arc_challenge
+
+        problem = _parse_arc_challenge(self._row(["1", "2", "3", "4"], "3"), 0)
+        assert problem["gold_answer"] == "C"
+
+    def test_letter_answer_key_unchanged(self):
+        from src.data_loading import _parse_arc_challenge
+
+        problem = _parse_arc_challenge(self._row(["A", "B", "C", "D"], "B"), 0)
+        assert problem["gold_answer"] == "B"
+
+
+class TestTruthfulQAGoldNotAlwaysA:
+    @staticmethod
+    def _row(question):
+        # HF truthful_qa mc1_targets always lists the correct answer first.
+        return {
+            "question": question,
+            "mc1_targets": {
+                "choices": ["correct one", "wrong 1", "wrong 2", "wrong 3"],
+                "labels": [1, 0, 0, 0],
+            },
+        }
+
+    def test_gold_letter_varies_across_problems(self):
+        from src.data_loading import _parse_truthfulqa
+
+        golds = {
+            _parse_truthfulqa(self._row(f"q{i}"), i)["gold_answer"]
+            for i in range(30)
+        }
+        # Without shuffling every gold is "A"; with the fix the letters vary.
+        assert len(golds) > 1
+
+    def test_gold_letter_points_at_correct_choice(self):
+        from src.data_loading import _parse_truthfulqa
+
+        for i in range(10):
+            problem = _parse_truthfulqa(self._row(f"q{i}"), i)
+            gold_idx = ord(problem["gold_answer"]) - ord("A")
+            assert problem["choices"][gold_idx] == "correct one"
+
+    def test_shuffle_is_deterministic(self):
+        from src.data_loading import _parse_truthfulqa
+
+        p1 = _parse_truthfulqa(self._row("same question"), 5)
+        p2 = _parse_truthfulqa(self._row("same question"), 5)
+        assert p1["choices"] == p2["choices"]
+        assert p1["gold_answer"] == p2["gold_answer"]

@@ -71,6 +71,16 @@ def generate_fig06() -> str:
         color = COLORS.get(family, "#888888")
         scale_gap = r.get("scale_gap") or r.get("param_gap") or r.get("params_gap")
         mean_cka = r.get("mean_cka") or r.get("avg_cka") or r.get("cka")
+        # exp07 records carry params_a/params_b_val and per-layer metrics
+        # instead of the aliases above; derive the values from those.
+        if scale_gap is None and r.get("params_a") is not None and r.get("params_b_val") is not None:
+            scale_gap = abs(float(r["params_b_val"]) - float(r["params_a"]))
+        if mean_cka is None and r.get("layer_metrics"):
+            vals = [
+                lm["cka"] for lm in r["layer_metrics"]
+                if isinstance(lm, dict) and lm.get("cka") is not None
+            ]
+            mean_cka = float(np.mean(vals)) if vals else None
         if scale_gap is None or mean_cka is None:
             continue
         label = family if family not in seen_families else None

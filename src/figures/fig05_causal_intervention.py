@@ -43,20 +43,23 @@ def generate_fig05() -> str:
     with open(summary_path, "r", encoding="utf-8") as f:
         summary = json.load(f)
 
-    # summary expected structure:
-    # list of dicts: {model_name, magnitude, ablation_flip_rate, amplification_flip_rate}
-    # OR a dict keyed by model_name
+    # exp03_summary.json: {"models": {model: {magnitude_str:
+    # {ablation_flip_rate, amplification_flip_rate}}}, "magnitudes": [...]}.
+    # A flat list of {model_name, magnitude, ...} records is also accepted.
 
     if isinstance(summary, dict):
         records = []
-        for model_name, model_data in summary.items():
-            if isinstance(model_data, list):
-                for entry in model_data:
-                    entry["model_name"] = model_name
-                    records.append(entry)
-            elif isinstance(model_data, dict):
-                model_data["model_name"] = model_name
-                records.append(model_data)
+        for model_name, model_data in summary.get("models", {}).items():
+            if not isinstance(model_data, dict):
+                continue
+            for mag_key, mag_data in model_data.items():
+                if not isinstance(mag_data, dict):
+                    continue
+                records.append({
+                    "model_name": model_name,
+                    "magnitude": float(mag_key),
+                    **mag_data,
+                })
         summary = records
 
     family_map = {m["short_name"]: m["family"] for m in MODEL_REGISTRY}

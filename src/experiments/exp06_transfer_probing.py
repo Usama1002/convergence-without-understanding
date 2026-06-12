@@ -57,16 +57,16 @@ def learn_projection(X_source: np.ndarray, X_target: np.ndarray) -> np.ndarray:
 
 def _peak_layer_idx(model_name: str) -> int:
     """Return normalized layer index to use as 'peak' layer (default: layer 10 = midpoint)."""
-    # Try to load Exp 2 results for peak layer; fall back to midpoint (layer 10).
-    probe_results_path = PATHS["probes_linear"] / "exp02_probe_results.json"
+    # exp02_all_results.json is a top-level list with key "peak_layer_idx"
+    probe_results_path = PATHS["probes_linear"] / "exp02_all_results.json"
     if probe_results_path.exists():
         try:
             with open(probe_results_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # Look for best_layer per model
-            for rec in data.get("results", []):
+            records = data if isinstance(data, list) else data.get("results", [])
+            for rec in records:
                 if rec.get("model") == model_name:
-                    return int(rec.get("best_layer", 10))
+                    return int(rec.get("peak_layer_idx", 10))
         except Exception:
             pass
     return 10  # midpoint of 21 layers
@@ -240,6 +240,9 @@ def run_experiment_6() -> dict:
     # Use (1 - mean accuracy) as distance; fill diagonal with 0
     dist_matrix = 1.0 - np.nan_to_num(transfer_acc_matrix, nan=0.5)
     np.fill_diagonal(dist_matrix, 0.0)
+    # Transfer accuracy is directional; symmetrize before squareform, which
+    # reads only the upper triangle with checks=False.
+    dist_matrix = (dist_matrix + dist_matrix.T) / 2.0
 
     # Convert to condensed form for linkage
     from scipy.spatial.distance import squareform

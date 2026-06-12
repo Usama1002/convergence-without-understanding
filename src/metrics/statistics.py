@@ -36,9 +36,16 @@ def bootstrap_ci(data, stat_fn=np.mean, n_bootstrap=1000, ci=0.95, seed=42):
         for _ in range(n_bootstrap)
     ])
 
-    # BCa: bias-correction and acceleration
-    # Bias correction factor z0
+    # BCa: bias-correction and acceleration. z0 is infinite when all
+    # bootstrap stats fall on one side of the observed value (min/max-like
+    # or tie-heavy statistics); fall back to the plain percentile CI.
     z0 = stats.norm.ppf(np.mean(boot_stats < observed))
+    if not np.isfinite(z0):
+        alpha = (1.0 - ci) / 2.0
+        return (
+            np.percentile(boot_stats, alpha * 100),
+            np.percentile(boot_stats, (1.0 - alpha) * 100),
+        )
 
     # Acceleration factor via jackknife
     jack_stats = np.array([stat_fn(np.delete(data, i)) for i in range(n)])
@@ -64,8 +71,21 @@ def bootstrap_ci(data, stat_fn=np.mean, n_bootstrap=1000, ci=0.95, seed=42):
     return (lower, upper)
 
 
-def bootstrap_ci_two_sample(X, Y, metric_fn, n_bootstrap=1000, ci=0.95, seed=42):
-    """Bootstrap CI for metric(X, Y) with paired resampling.
+def bootstrap_ci_two_sample(
+    X, Y, metric_fn, n_bootstrap=1000, ci=0.95, seed=42, subsample=0.8
+):
+    """Subsampling CI for metric(X, Y) with paired resampling.
+
+    Resamples WITHOUT replacement (m-out-of-n subsampling, m = subsample * n).
+    Classic with-replacement bootstrap is invalid for Gram-based metrics such
+    as CKA: duplicated rows make the Gram matrix artificially low-rank, which
+    inflates every resampled value, biasing the interval upward and making it
+    too narrow.
+
+    The interval is recentered on the observed full-sample statistic: for
+    metrics whose bias depends on n (biased CKA), the size-m subsample
+    distribution is shifted relative to the size-n value. The residual
+    sqrt(n/m) width inflation (~1.12 at the default 0.8) is conservative.
 
     Parameters
     ----------
@@ -76,11 +96,13 @@ def bootstrap_ci_two_sample(X, Y, metric_fn, n_bootstrap=1000, ci=0.95, seed=42)
     metric_fn : callable
         Function metric_fn(X, Y) -> float.
     n_bootstrap : int
-        Number of bootstrap resamples.
+        Number of resamples.
     ci : float
         Confidence level.
     seed : int
         Random seed.
+    subsample : float
+        Fraction of rows drawn (without replacement) per resample.
 
     Returns
     -------
@@ -93,15 +115,17 @@ def bootstrap_ci_two_sample(X, Y, metric_fn, n_bootstrap=1000, ci=0.95, seed=42)
 
     observed = metric_fn(X, Y)
 
+    m = max(4, int(np.ceil(subsample * n)))
     boot_stats = []
     for _ in range(n_bootstrap):
-        idx = rng.integers(0, n, size=n)
+        idx = rng.choice(n, size=min(m, n), replace=False)
         boot_stats.append(metric_fn(X[idx], Y[idx]))
 
     boot_stats = np.array(boot_stats)
     alpha = (1.0 - ci) / 2.0
-    lower = np.percentile(boot_stats, alpha * 100)
-    upper = np.percentile(boot_stats, (1.0 - alpha) * 100)
+    center = np.median(boot_stats)
+    lower = observed + (np.percentile(boot_stats, alpha * 100) - center)
+    upper = observed + (np.percentile(boot_stats, (1.0 - alpha) * 100) - center)
 
     return (observed, lower, upper)
 

@@ -27,6 +27,33 @@ from src.metrics.cka import linear_cka
 # ---------------------------------------------------------------------------
 
 
+def equalize_strata(
+    strata: dict[int, list[int]],
+    min_size: int = 5,
+    seed: int = 42,
+) -> tuple[dict[int, list[int]], int]:
+    """Subsample every stratum with >= min_size members to a common size.
+
+    The biased CKA estimator grows as the sample count shrinks, so CKA values
+    computed on strata of different sizes are not comparable: a stratum with
+    14 problems gets a larger bias boost than one with 90. Equalizing sizes
+    removes that artifact while keeping the per-stratum comparison intact.
+
+    Returns the equalized strata (sorted indices, deterministic for a given
+    seed) and the common size. Strata below min_size are dropped.
+    """
+    rng = np.random.default_rng(seed)
+    eligible = {k: v for k, v in strata.items() if len(v) >= min_size}
+    if not eligible:
+        return {}, 0
+    equal_n = min(len(v) for v in eligible.values())
+    equalized = {
+        k: sorted(rng.choice(v, size=equal_n, replace=False).tolist())
+        for k, v in sorted(eligible.items())
+    }
+    return equalized, equal_n
+
+
 def _load_correctness_matrix() -> tuple[np.ndarray, list[str], list[str]] | None:
     """Load all evaluation results and build (n_problems, n_models) correctness matrix.
 
@@ -131,8 +158,12 @@ def run_experiment_8() -> dict:
         nc = int(n_correct_per_problem[prob_idx])
         strata.setdefault(nc, []).append(prob_idx)
 
+    # Biased CKA rises as the sample count falls, so strata of different
+    # sizes are not comparable; subsample all to the smallest eligible size.
+    strata, equal_n = equalize_strata(strata, min_size=5, seed=42)
+
     # ------------------------------------------------------------------
-    # Step 4: For each stratum with >=5 problems, compute mean CKA
+    # Step 4: For each (equal-size) stratum, compute mean CKA
     # ------------------------------------------------------------------
     stratum_results: list[dict] = []
 
@@ -185,6 +216,7 @@ def run_experiment_8() -> dict:
         "n_problems": n_problems,
         "n_models": n_models,
         "available_models": available_models,
+        "stratum_size_equalized": equal_n,
         "strata": stratum_results,
     }
     out_path = out_dir / "exp08_results.json"

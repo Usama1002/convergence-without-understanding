@@ -57,6 +57,67 @@ def linear_cka(X: np.ndarray, Y: np.ndarray) -> float:
     return float(hsic_kl / (norm_k * norm_l))
 
 
+def _hsic_unbiased(K: np.ndarray, L: np.ndarray) -> float:
+    """Unbiased HSIC estimator (Song et al. 2012, Eq. 5).
+
+    Expects raw (uncentered) Gram matrices; the estimator performs its own
+    centering. Requires n >= 4 samples.
+    """
+    n = K.shape[0]
+    if n < 4:
+        raise ValueError(f"unbiased HSIC requires n >= 4 samples, got {n}")
+    K_t = K.astype(np.float64, copy=True)
+    L_t = L.astype(np.float64, copy=True)
+    np.fill_diagonal(K_t, 0.0)
+    np.fill_diagonal(L_t, 0.0)
+    value = (
+        np.sum(K_t * L_t)
+        + K_t.sum() * L_t.sum() / ((n - 1) * (n - 2))
+        - 2.0 * (K_t @ L_t).sum() / (n - 2)
+    )
+    return float(value / (n * (n - 3)))
+
+
+def unbiased_cka(X: np.ndarray, Y: np.ndarray) -> float:
+    """
+    Compute Linear CKA with the unbiased HSIC estimator (Song et al. 2012).
+
+    The biased estimator (linear_cka) has a large positive expectation under
+    the null of no alignment, growing with feature dimension d (~0.56 at
+    n=100, d=128; ~0.98 at n=100, d=5120 on independent Gaussians). The
+    unbiased estimator is ~0 under the null at every n and d, which keeps
+    CKA comparable across models of different hidden size.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d1)
+        First representation matrix with n samples and d1 features.
+    Y : np.ndarray, shape (n, d2)
+        Second representation matrix with n samples and d2 features.
+
+    Returns
+    -------
+    float
+        Unbiased CKA value. Approximately in [0, 1]; may be slightly
+        negative due to the bias correction.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    Y = np.asarray(Y, dtype=np.float64)
+
+    K = X @ X.T
+    L = Y @ Y.T
+
+    hsic_kl = _hsic_unbiased(K, L)
+    hsic_kk = _hsic_unbiased(K, K)
+    hsic_ll = _hsic_unbiased(L, L)
+
+    denom = np.sqrt(max(hsic_kk * hsic_ll, 0.0))
+    if denom < 1e-12:
+        return 0.0
+
+    return float(hsic_kl / denom)
+
+
 def uncentered_cka(X: np.ndarray, Y: np.ndarray) -> float:
     """
     Compute uncentered Linear CKA between representation matrices X and Y.

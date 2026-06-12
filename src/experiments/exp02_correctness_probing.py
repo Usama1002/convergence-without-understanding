@@ -26,6 +26,7 @@ import torch.nn as nn
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import StandardScaler
 
 from src.config import (
     MLP_HIDDEN_DIM,
@@ -75,6 +76,7 @@ def train_mlp_probe(
     hidden_dim: int = MLP_HIDDEN_DIM,
     epochs: int = 50,
     lr: float = 1e-3,
+    seed: int = 42,
 ) -> dict:
     """Train an MLP probe and evaluate on a validation set.
 
@@ -87,11 +89,15 @@ def train_mlp_probe(
     hidden_dim : int
     epochs  : int
     lr      : float
+    seed    : int (torch init/training seed; without it MLP numbers are
+              irreproducible run-to-run and architecture-sweep comparisons
+              mix architecture effects with initialization noise)
 
     Returns
     -------
     dict with keys: accuracy, auc, model
     """
+    torch.manual_seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     X_tr = torch.tensor(X_train, dtype=torch.float32).to(device)
@@ -172,6 +178,13 @@ def run_experiment_2() -> None:
                     X_train, X_val = X[train_idx], X[val_idx]
                     y_train, y_val = labels[train_idx], labels[val_idx]
 
+                    # Standardize per fold (fit on train only); raw dimension
+                    # scales differ by orders of magnitude and would dominate
+                    # the L2 penalty.
+                    scaler = StandardScaler()
+                    X_train = scaler.fit_transform(X_train)
+                    X_val = scaler.transform(X_val)
+
                     # --- Linear probe ---
                     C = 1.0 / PROBE_L2_DEFAULT
                     lin_probe = LogisticRegression(C=C, max_iter=1000, solver="lbfgs")
@@ -230,17 +243,21 @@ def run_experiment_2() -> None:
         )
 
         X_peak = normalized_states[:, peak_layer_idx, :]
+        final_scaler = StandardScaler()
+        X_peak_scaled = final_scaler.fit_transform(X_peak)
         C = 1.0 / PROBE_L2_DEFAULT
         final_probe = LogisticRegression(C=C, max_iter=1000, solver="lbfgs")
-        final_probe.fit(X_peak, labels)
+        final_probe.fit(X_peak_scaled, labels)
 
-        # Save probe weights
+        # Save probe weights (with its scaler, so the probe can be reapplied)
         probe_path = PATHS["probes_weights"] / f"{model_name}_peak_probe.pkl"
         with open(probe_path, "wb") as f:
-            pickle.dump(final_probe, f)
+            pickle.dump({"scaler": final_scaler, "probe": final_probe}, f)
 
-        # Save correctness direction (coef_[0])
-        direction = final_probe.coef_[0]  # shape (hidden_dim,)
+        # Save correctness direction mapped back to RAW activation space
+        # (w . (x - mu) / sigma = (w / sigma) . x + const), since the causal
+        # interventions (exp03) apply the direction to raw hidden states.
+        direction = final_probe.coef_[0] / final_scaler.scale_  # (hidden_dim,)
         direction_path = PATHS["probes_weights"] / f"{model_name}_correctness_direction.npy"
         np.save(direction_path, direction)
 

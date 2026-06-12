@@ -17,6 +17,18 @@ import numpy as np
 from src.config import MAX_NEW_TOKENS, MAX_SEQ_LEN, PATHS, ensure_all_dirs
 from src.data_loading import format_prompt
 
+_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def valid_letters_for(problem: dict) -> str:
+    """Option letters actually presented for a problem ("ABCD" if none).
+
+    Pass this to evaluate_response / extract_letter_answer so problems with
+    more than four choices (TruthfulQA, some ARC items) stay answerable.
+    """
+    n_choices = len(problem.get("choices", []) or [])
+    return _LETTERS[:n_choices] if n_choices else "ABCD"
+
 
 # ---------------------------------------------------------------------------
 # Answer extraction
@@ -24,11 +36,13 @@ from src.data_loading import format_prompt
 
 
 def extract_number_answer(text: str) -> str | None:
-    """Extract last number from response.
+    """Extract the answer number from a response.
 
-    Checks for the GSM8K-style '#### <number>' pattern first, then falls
-    back to the last number found in the text.  Commas are stripped from
-    numbers.  Returns None if no number is found.
+    Checks for the GSM8K-style '#### <number>' pattern first, then for an
+    explicit answer phrase ('the answer is 42', 'answer: 42', '= 42'), and
+    only then falls back to the last number found in the text (the fallback
+    misfires on multi-step traces whose final sentence is not the answer).
+    Commas are stripped from numbers.  Returns None if no number is found.
     """
     if text is None:
         return None
@@ -38,6 +52,15 @@ def extract_number_answer(text: str) -> str | None:
     if hash_match:
         return hash_match.group(1).replace(",", "")
 
+    # Explicit answer phrase
+    phrase_match = re.search(
+        r"(?:answer|result)\s*(?:is|:|=)\s*\$?([\d,]+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if phrase_match:
+        return phrase_match.group(1).replace(",", "")
+
     # Fallback: find all numbers and return the last one
     numbers = re.findall(r"[\d,]+(?:\.\d+)?", text)
     if numbers:
@@ -46,23 +69,50 @@ def extract_number_answer(text: str) -> str | None:
     return None
 
 
-def extract_letter_answer(text: str) -> str | None:
-    """Extract first A-D letter answer from response.
+def extract_letter_answer(text: str, valid_letters: str = "ABCD") -> str | None:
+    """Extract the first multiple-choice letter answer from a response.
 
-    Tries standalone word-boundary match \\b[A-D]\\b first, then looks for
-    [A-D] followed by punctuation (e.g. 'A.' or 'A)').
+    ``valid_letters`` are the option letters actually presented for this
+    problem (e.g. "ABCDE" for a 5-choice ARC item, up to "ABCDEFGHIJKLM"
+    for TruthfulQA); with a fixed A-D range, a problem whose gold answer
+    sits beyond "D" is unanswerable for every model.
+
+    Tries an explicit answer phrase ('the answer is C', 'option B') first,
+    then a standalone UPPERCASE letter, then a letter followed by
+    punctuation (any case, e.g. 'b)'). Standalone matching is case-sensitive
+    so the article 'a' and the 'd in "I'd" cannot be read as answers; a
+    bare standalone 'I' is skipped for the same reason (it still matches in
+    an answer phrase or as 'I)').
     Returns None if not found.
     """
     if text is None:
         return None
 
-    # Try standalone letter (word boundary), case-insensitive
-    match = re.search(r"\b([A-Da-d])\b", text)
+    letters = valid_letters.upper()
+    rng = f"[{letters}{letters.lower()}]"
+    # In the phrase tier a lowercase 'a' is excluded: "the answer is a bit
+    # tricky" must not parse as answer "A" (uppercase 'A' and the other
+    # lowercase letters stay accepted: 'the answer is c').
+    phrase = f"[{letters}{letters.lower().replace('a', '')}]"
+    up_bare = f"[{letters.replace('I', '')}]"  # standalone 'I' = pronoun
+
+    # Explicit answer phrase; the cue words are case-insensitive but the
+    # letter class is NOT (re.IGNORECASE would let 'a' back in via 'A').
+    match = re.search(
+        rf"(?i:answer|option|choice)\s*(?i:is|:)?\s*\(?({phrase})\)?\b", text,
+    )
     if match:
         return match.group(1).upper()
 
-    # Fallback: letter followed by punctuation
-    match = re.search(r"([A-Da-d])[.),:]", text)
+    # Standalone letter (word boundary), UPPERCASE only (a lowercase 'a'/'d'
+    # alone is far more likely to be the article or a contraction)
+    match = re.search(rf"\b({up_bare})\b", text)
+    if match:
+        return match.group(1)
+
+    # Fallback: letter directly followed by punctuation ('b)' is an answer,
+    # not an article), any case
+    match = re.search(rf"\b({rng})[.),:]", text)
     if match:
         return match.group(1).upper()
 
@@ -99,8 +149,16 @@ def check_correctness(extracted: str | None, gold: str, task_type: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def evaluate_response(response: str, gold_answer: str, task_type: str) -> dict:
+def evaluate_response(
+    response: str,
+    gold_answer: str,
+    task_type: str,
+    valid_letters: str = "ABCD",
+) -> dict:
     """Evaluate a single model response against the gold answer.
+
+    ``valid_letters`` are the option letters presented for this problem
+    (see extract_letter_answer); ignored for math.
 
     Returns a dict with:
         extracted_answer: the parsed answer (str or None)
@@ -110,7 +168,7 @@ def evaluate_response(response: str, gold_answer: str, task_type: str) -> dict:
     if task_type == "math":
         extracted = extract_number_answer(response)
     else:
-        extracted = extract_letter_answer(response)
+        extracted = extract_letter_answer(response, valid_letters=valid_letters)
 
     correct = check_correctness(extracted, gold_answer, task_type)
 
@@ -223,7 +281,10 @@ def evaluate_model(
         n_output_tokens: int = len(new_tokens)
         raw_response: str = tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-        eval_result = evaluate_response(raw_response, gold_answer, task_type)
+        eval_result = evaluate_response(
+            raw_response, gold_answer, task_type,
+            valid_letters=valid_letters_for(problem),
+        )
 
         results.append(
             {
@@ -286,7 +347,9 @@ def compute_correctness_matrix(
     ----------
     all_results:
         List of per-model result lists, each as returned by evaluate_model().
-        All lists must cover the same set of problems in the same order.
+        Results are joined on problem_id (the row order of the FIRST model
+        defines the output order), so per-model files may be reordered or
+        have extra problems. A model missing any problem_id raises.
 
     Returns
     -------
@@ -305,8 +368,17 @@ def compute_correctness_matrix(
 
     correctness = np.zeros((n_problems, n_models), dtype=bool)
     for j, results in enumerate(all_results):
-        for i, result in enumerate(results):
-            correctness[i, j] = bool(result["correct"])
+        # Join on problem_id; a positional join misaligns correctness with
+        # hidden states whenever a model's results are reordered.
+        by_id = {r["problem_id"]: r for r in results}
+        missing = [pid for pid in problem_ids if pid not in by_id]
+        if missing:
+            raise ValueError(
+                f"model '{model_names[j]}' is missing {len(missing)} problems "
+                f"(first few: {missing[:5]})"
+            )
+        for i, pid in enumerate(problem_ids):
+            correctness[i, j] = bool(by_id[pid]["correct"])
 
     return correctness, problem_ids, model_names
 

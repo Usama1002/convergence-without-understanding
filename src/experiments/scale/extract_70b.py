@@ -80,7 +80,13 @@ if __name__ == "__main__":
 
         hs_dir = "data/hidden_states"
         os.makedirs(hs_dir, exist_ok=True)
-        np.savez_compressed(f"{hs_dir}/{name}.npz", pre_decision=states, post_decision=states)
+        # No post-decision pass at 70B scale: NaN marks the states as
+        # missing (exp10 skips them); a pre copy would compare pre vs pre.
+        np.savez_compressed(
+            f"{hs_dir}/{name}.npz",
+            pre_decision=states,
+            post_decision=np.full_like(states, np.nan),
+        )
         with open(f"{hs_dir}/{name}_info.json", "w") as f:
             json.dump(info, f, indent=2)
 

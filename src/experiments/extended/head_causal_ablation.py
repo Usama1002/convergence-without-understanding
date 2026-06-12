@@ -16,7 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
 from src.config import MODEL_REGISTRY, MODEL_SHORT_NAMES, PATHS, MAX_SEQ_LEN, MAX_NEW_TOKENS
 from src.data_loading import load_all_problems, format_prompt
-from src.evaluation import evaluate_response, load_evaluation_results
+from src.evaluation import evaluate_response, load_evaluation_results, valid_letters_for
 
 
 def run_a3(device="cuda", n_problems=100):
@@ -140,7 +140,10 @@ def run_a3(device="cuda", n_problems=100):
                             )
                         input_len = inputs["input_ids"].shape[1]
                         response = tokenizer.decode(output_ids[0][input_len:], skip_special_tokens=True)
-                        eval_result = evaluate_response(response, problem["gold_answer"], problem["task_type"])
+                        eval_result = evaluate_response(
+                            response, problem["gold_answer"], problem["task_type"],
+                            valid_letters=valid_letters_for(problem),
+                        )
                         if not eval_result["correct"]:
                             n_flips += 1
                     finally:

@@ -237,8 +237,9 @@ def fig5_transfer_vs_causal():
     flip_rates = []
     for model_name, model_data in causal_data.get("models", {}).items():
         causal_models.append(model_name)
-        # Get flip rate at magnitude 1.0
-        abl = model_data.get("ablation_flip_rates", {}).get("1.0", 0)
+        # exp03 nests per-magnitude dicts under the model:
+        # {"1.0": {"ablation_flip_rate": x, ...}}
+        abl = model_data.get("1.0", {}).get("ablation_flip_rate", 0)
         flip_rates.append(abl)
 
     y_pos2 = range(len(causal_models))

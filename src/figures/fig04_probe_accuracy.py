@@ -35,6 +35,21 @@ def generate_fig04() -> str:
     with open(results_path, "r", encoding="utf-8") as f:
         results = json.load(f)
 
+    # exp02_all_results.json is a per-model list with per-layer numbers
+    # nested under "layer_results"; flatten to the per-layer records used
+    # below.
+    flat: list[dict] = []
+    for r in results:
+        for lr in r.get("layer_results", []):
+            flat.append({
+                "model": r.get("model"),
+                "layer_pos_idx": lr.get("layer_pos_idx"),
+                "linear_accuracy": lr.get("linear_probe", {}).get("mean_accuracy"),
+                "mlp_accuracy": lr.get("mlp_probe", {}).get("mean_accuracy"),
+            })
+    if flat:
+        results = flat
+
     # Build a lookup: model -> layer_pos_idx -> {linear_acc, mlp_acc}
     # results is expected to be a list of dicts with keys:
     #   model_name, layer_pos_idx, linear_accuracy, mlp_accuracy (mean across seeds/folds)
