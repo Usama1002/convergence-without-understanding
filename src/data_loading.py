@@ -7,6 +7,7 @@ and HellaSwag datasets into a uniform dict format for evaluation.
 
 from __future__ import annotations
 
+import random
 import re
 from typing import Any
 
@@ -70,7 +71,15 @@ def _parse_gsm8k(row: dict, idx: int) -> dict:
 def _parse_arc_challenge(row: dict, idx: int) -> dict:
     problem_id = f"arc_challenge_{idx:04d}"
     choices_text = row["choices"]["text"]
-    choice_labels = row["choices"]["label"]
+    choice_labels = list(row["choices"]["label"])
+    # ARC answerKeys use the dataset's own labels (letters for most items,
+    # "1"-"4" for some); prompts are always formatted with A/B/C/..., so map
+    # the key through its position to the letter the model actually sees.
+    answer_key = str(row["answerKey"]).strip()
+    if answer_key in choice_labels:
+        gold_answer = _idx_to_letter(choice_labels.index(answer_key))
+    else:
+        gold_answer = answer_key
     return {
         "problem_id": problem_id,
         "domain": "science",
@@ -78,16 +87,20 @@ def _parse_arc_challenge(row: dict, idx: int) -> dict:
         "question": row["question"],
         "choices": choices_text,
         "choice_labels": choice_labels,
-        "gold_answer": row["answerKey"],
+        "gold_answer": gold_answer,
     }
 
 
 def _parse_truthfulqa(row: dict, idx: int) -> dict:
     problem_id = f"truthfulqa_{idx:04d}"
-    choices = row["mc1_targets"]["choices"]
-    labels = row["mc1_targets"]["labels"]
-    # gold = letter corresponding to the index where label == 1
-    gold_idx = labels.index(1)
+    choices = list(row["mc1_targets"]["choices"])
+    labels = list(row["mc1_targets"]["labels"])
+    # TruthfulQA mc1_targets lists the correct answer first; shuffle
+    # deterministically per problem so the gold letter is not always "A".
+    order = list(range(len(choices)))
+    random.Random(problem_id).shuffle(order)
+    choices = [choices[i] for i in order]
+    gold_idx = order.index(labels.index(1))
     gold_answer = _idx_to_letter(gold_idx)
     return {
         "problem_id": problem_id,

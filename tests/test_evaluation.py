@@ -253,3 +253,211 @@ class TestEvaluateResponse:
         result = evaluate_response("The total is #### 1,000", "1000", "math")
         assert result["correct"] is True
         assert result["extracted_answer"] == "1000"
+
+
+# ---------------------------------------------------------------------------
+# Letter extraction: article / contraction fix
+# ---------------------------------------------------------------------------
+
+
+class TestExtractLetterAnswerArticleFix:
+    """The standalone match must not fire on the article 'a' or contractions."""
+
+    def test_article_a_not_matched(self):
+        # Previously returned "A" (the article), mislabeling the answer.
+        assert extract_letter_answer("a bit tricky, so D.") == "D"
+
+    def test_contraction_d_not_matched(self):
+        # The 'd' in "I'd" sits at a word boundary; it must not match.
+        assert extract_letter_answer("I'd say B") == "B"
+
+    def test_article_a_only_returns_none(self):
+        assert extract_letter_answer("a tricky question indeed") is None
+
+    def test_answer_phrase_lowercase_letter(self):
+        # Lowercase letters are still accepted inside an explicit phrase.
+        assert extract_letter_answer("the answer is c") == "C"
+
+    def test_answer_phrase_takes_precedence(self):
+        # "B" appears first in the text, but the explicit phrase names C.
+        assert extract_letter_answer("B is tempting but the answer is C") == "C"
+
+    def test_lowercase_with_punctuation_still_works(self):
+        # 'b)' is an answer format, not an article; stays accepted.
+        assert extract_letter_answer("b) Mercury") == "B"
+
+    def test_trailing_d_of_word_not_matched(self):
+        # 'd' at the end of "word." is inside a word: no boundary match.
+        assert extract_letter_answer("That is my final word.") is None
+
+
+# ---------------------------------------------------------------------------
+# Number extraction: explicit answer phrase
+# ---------------------------------------------------------------------------
+
+
+class TestExtractNumberAnswerPhrase:
+
+    def test_phrase_beats_last_number(self):
+        # The last number (3) is not the answer; the phrase names 18.
+        text = "The answer is 18. Double-check: 3 apples each."
+        assert extract_number_answer(text) == "18"
+
+    def test_hash_pattern_still_wins(self):
+        text = "The answer is 5.\n#### 7"
+        assert extract_number_answer(text) == "7"
+
+    def test_fallback_unchanged_without_phrase(self):
+        assert extract_number_answer("Step 7*6=42") == "42"
+
+
+# ---------------------------------------------------------------------------
+# Correctness matrix: problem_id join
+# ---------------------------------------------------------------------------
+
+
+class TestComputeCorrectnessMatrixJoin:
+
+    @staticmethod
+    def _results(model, ids_correct):
+        return [
+            {"problem_id": pid, "model": model, "correct": c}
+            for pid, c in ids_correct
+        ]
+
+    def test_reordered_results_align_correctly(self):
+        from src.evaluation import compute_correctness_matrix
+
+        m1 = self._results("m1", [("p0", True), ("p1", False), ("p2", True)])
+        # Same problems, different order: must land in m1's row order.
+        m2 = self._results("m2", [("p2", False), ("p0", True), ("p1", True)])
+        matrix, ids, names = compute_correctness_matrix([m1, m2])
+        assert ids == ["p0", "p1", "p2"]
+        assert names == ["m1", "m2"]
+        assert matrix[:, 0].tolist() == [True, False, True]
+        assert matrix[:, 1].tolist() == [True, True, False]
+
+    def test_missing_problem_raises(self):
+        import pytest as _pytest
+
+        from src.evaluation import compute_correctness_matrix
+
+        m1 = self._results("m1", [("p0", True), ("p1", False)])
+        m2 = self._results("m2", [("p0", True)])
+        with _pytest.raises(ValueError, match="missing"):
+            compute_correctness_matrix([m1, m2])
+
+
+# ---------------------------------------------------------------------------
+# Re-scoring saved generations (src/rescore.py)
+# ---------------------------------------------------------------------------
+
+
+class TestRescoreResults:
+
+    @staticmethod
+    def _problem(pid, task_type, gold):
+        return {"problem_id": pid, "task_type": task_type, "gold_answer": gold}
+
+    def test_rescore_flips_with_corrected_gold(self):
+        from src.rescore import rescore_results
+
+        # Old pipeline scored this wrong: numeric ARC key "3" never matched
+        # the extracted letter. With the corrected gold "C" it is right.
+        results = [{
+            "problem_id": "arc_0001",
+            "raw_response": "The answer is C.",
+            "extracted_answer": "C",
+            "gold_answer": "3",
+            "correct": False,
+        }]
+        problems = {"arc_0001": self._problem("arc_0001", "science", "C")}
+        summary = rescore_results(results, problems)
+        assert results[0]["correct"] is True
+        assert summary["n_flipped"] == 1
+        assert summary["accuracy_after"] == 1.0
+
+    def test_truthfulqa_left_untouched(self):
+        from src.rescore import rescore_results
+
+        results = [{
+            "problem_id": "tq_0001",
+            "raw_response": "A",
+            "extracted_answer": "A",
+            "gold_answer": "A",
+            "correct": True,
+        }]
+        problems = {"tq_0001": self._problem("tq_0001", "truthfulness", "C")}
+        summary = rescore_results(results, problems)
+        # Prompt changed for TruthfulQA; old generations cannot be re-scored.
+        assert results[0]["correct"] is True
+        assert results[0]["gold_answer"] == "A"
+        assert summary["n_skipped"] == 1
+        assert summary["n_rescored"] == 0
+
+    def test_unknown_problem_id_skipped(self):
+        from src.rescore import rescore_results
+
+        results = [{
+            "problem_id": "ghost_0001",
+            "raw_response": "#### 42",
+            "gold_answer": "42",
+            "correct": True,
+        }]
+        summary = rescore_results(results, {})
+        assert summary["n_skipped"] == 1
+        assert results[0]["correct"] is True
+
+
+# ---------------------------------------------------------------------------
+# Letter extraction: valid_letters range (TruthfulQA has up to 13 choices)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractLetterAnswerRange:
+
+    def test_gold_beyond_d_extractable(self):
+        # With a fixed A-D range, a 13-choice problem whose gold is "G" was
+        # unanswerable for every model.
+        letters = "ABCDEFGHIJKLM"
+        assert extract_letter_answer("The answer is G.", letters) == "G"
+        assert extract_letter_answer("g) the correct one", letters) == "G"
+
+    def test_letters_outside_range_ignored(self):
+        # Default range stays A-D: "E" is not a valid answer there.
+        assert extract_letter_answer("The answer is E.") is None
+
+    def test_bare_capital_i_is_pronoun(self):
+        letters = "ABCDEFGHIJKLM"
+        assert extract_letter_answer("I would say B", letters) == "B"
+
+    def test_i_with_punctuation_is_answer(self):
+        letters = "ABCDEFGHIJKLM"
+        assert extract_letter_answer("I) the ninth option", letters) == "I"
+
+    def test_i_in_answer_phrase_is_answer(self):
+        letters = "ABCDEFGHIJKLM"
+        assert extract_letter_answer("the answer is I", letters) == "I"
+
+    def test_five_choice_arc(self):
+        assert extract_letter_answer("E is correct", "ABCDE") == "E"
+
+
+class TestArticleAfterAnswerCue:
+    """Regression: the article directly after the cue word must not parse as 'A'."""
+
+    def test_article_after_answer_is(self):
+        assert extract_letter_answer("The answer is a bit tricky, so D.") == "D"
+
+    def test_article_after_answer_is_with_late_letter(self):
+        assert extract_letter_answer("The answer is a hard one, I would pick B") == "B"
+
+    def test_uppercase_a_after_cue_is_an_answer(self):
+        assert extract_letter_answer("the answer is A") == "A"
+
+    def test_lowercase_c_after_cue_still_accepted(self):
+        assert extract_letter_answer("the answer is c") == "C"
+
+    def test_cue_words_case_insensitive(self):
+        assert extract_letter_answer("ANSWER: B") == "B"
+        assert extract_letter_answer("The Answer is C") == "C"
